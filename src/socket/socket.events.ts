@@ -17,6 +17,8 @@ export const SOCKET_EVENTS = {
   // Drawing events
   STROKE_ADD: 'stroke:add',
   STROKE_RECEIVED: 'stroke:received',
+  STROKE_STREAM: 'stroke:stream',
+  STROKE_STREAM_RECEIVED: 'stroke:stream:received',
   CANVAS_CLEAR: 'canvas:clear',
   CANVAS_CLEARED: 'canvas:cleared',
   CANVAS_UNDO: 'canvas:undo',

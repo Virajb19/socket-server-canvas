@@ -23,6 +23,7 @@ interface DrawingStroke {
 interface RoomState {
   users: Map<string, User>;
   strokes: DrawingStroke[];
+  redoStack: DrawingStroke[];
 }
 
 // In-memory room storage
@@ -33,6 +34,7 @@ const getOrCreateRoom = (roomId: string): RoomState => {
     rooms.set(roomId, {
       users: new Map(),
       strokes: [],
+      redoStack: [],
     });
   }
   return rooms.get(roomId)!;
@@ -49,7 +51,7 @@ export const initSocketServer = (httpServer: HttpServer): SocketIOServer => {
       methods: ['GET', 'POST'],
       credentials: true,
     },
-    transports: ['websocket', 'polling'],
+    transports: ['polling', 'websocket'],
   });
 
   io.on('connection', (socket: Socket) => {
@@ -137,8 +139,24 @@ export const initSocketServer = (httpServer: HttpServer): SocketIOServer => {
 
       if (room) {
         room.strokes.push(stroke);
+        room.redoStack = []; // Clear redo stack on new action
         socket.to(roomId).emit(SOCKET_EVENTS.STROKE_RECEIVED, stroke);
       }
+    });
+
+    // Handle real-time stroke streaming (points as they are drawn)
+    socket.on(SOCKET_EVENTS.STROKE_STREAM, (data: { 
+      roomId: string; 
+      strokeId: string;
+      userId: string;
+      point: { x: number; y: number };
+      color: string;
+      width: number;
+      tool: string;
+      isStart: boolean;
+    }) => {
+      const { roomId, ...streamData } = data;
+      socket.to(roomId).emit(SOCKET_EVENTS.STROKE_STREAM_RECEIVED, streamData);
     });
 
     // Handle cursor move
@@ -160,24 +178,32 @@ export const initSocketServer = (httpServer: HttpServer): SocketIOServer => {
     });
 
     // Handle undo
-    socket.on(SOCKET_EVENTS.CANVAS_UNDO, (data: { roomId: string; strokes: DrawingStroke[] }) => {
-      const { roomId, strokes } = data;
+    socket.on(SOCKET_EVENTS.CANVAS_UNDO, (data: { roomId: string }) => {
+      const { roomId } = data;
       const room = rooms.get(roomId);
 
-      if (room) {
-        room.strokes = strokes;
-        socket.to(roomId).emit(SOCKET_EVENTS.CANVAS_STATE, { strokes });
+      if (room && room.strokes.length > 0) {
+        const stroke = room.strokes.pop();
+        if (stroke) {
+          room.redoStack.push(stroke);
+          // Broadcast new state to ALL users in the room
+          io.to(roomId).emit(SOCKET_EVENTS.CANVAS_STATE, { strokes: room.strokes });
+        }
       }
     });
 
     // Handle redo
-    socket.on(SOCKET_EVENTS.CANVAS_REDO, (data: { roomId: string; strokes: DrawingStroke[] }) => {
-      const { roomId, strokes } = data;
+    socket.on(SOCKET_EVENTS.CANVAS_REDO, (data: { roomId: string }) => {
+      const { roomId } = data;
       const room = rooms.get(roomId);
 
-      if (room) {
-        room.strokes = strokes;
-        socket.to(roomId).emit(SOCKET_EVENTS.CANVAS_STATE, { strokes });
+      if (room && room.redoStack.length > 0) {
+        const stroke = room.redoStack.pop();
+        if (stroke) {
+          room.strokes.push(stroke);
+          // Broadcast new state to ALL users in the room
+          io.to(roomId).emit(SOCKET_EVENTS.CANVAS_STATE, { strokes: room.strokes });
+        }
       }
     });
 
@@ -188,10 +214,29 @@ export const initSocketServer = (httpServer: HttpServer): SocketIOServer => {
 
       if (room) {
         room.strokes = [];
+        room.redoStack = [];
         io.to(roomId).emit(SOCKET_EVENTS.CANVAS_CLEARED);
       }
     });
 
+    // Handle room-deleted
+    socket.on(SOCKET_EVENTS.ROOM_DELETED, (data: { roomId: string}) => {
+          console.log(`[Socket] Room deleted: ${data.roomId}`);
+         const { roomId } = data
+         const room = rooms.get(roomId)
+
+             if(room) {
+                io.to(roomId).emit(SOCKET_EVENTS.ROOM_DELETED, {
+                roomId,
+                reason: 'Room deleted by owner',
+              });
+
+              // Delete room from memory
+              rooms.delete(roomId);
+
+              console.log(`[Socket] Room ${roomId} deleted by Owner`);
+         }
+    })
     // Handle disconnect
     socket.on('disconnect', () => {
       console.log(`[Socket] Client disconnected: ${socket.id}`);
