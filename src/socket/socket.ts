@@ -100,6 +100,8 @@ export const initSocketServer = (httpServer: HttpServer): SocketIOServer => {
       socket.emit(SOCKET_EVENTS.ROOM_JOINED, {
         users: getUsersArray(room),
         strokes: room.strokes,
+        canUndo: room.strokes.length > 0,
+        canRedo: room.redoStack.length > 0,
       });
 
       // Notify others about the new user
@@ -178,31 +180,47 @@ export const initSocketServer = (httpServer: HttpServer): SocketIOServer => {
     });
 
     // Handle undo
-    socket.on(SOCKET_EVENTS.CANVAS_UNDO, (data: { roomId: string }) => {
-      const { roomId } = data;
+    socket.on(SOCKET_EVENTS.CANVAS_UNDO, (data: { roomId: string; userId?: string }) => {
+      const { roomId, userId } = data;
       const room = rooms.get(roomId);
 
       if (room && room.strokes.length > 0) {
         const stroke = room.strokes.pop();
         if (stroke) {
           room.redoStack.push(stroke);
+          // Get user info for attribution
+          const user = userId ? room.users.get(userId) : null;
           // Broadcast new state to ALL users in the room
-          io.to(roomId).emit(SOCKET_EVENTS.CANVAS_STATE, { strokes: room.strokes });
+          io.to(roomId).emit(SOCKET_EVENTS.CANVAS_STATE, { 
+            strokes: room.strokes,
+            canUndo: room.strokes.length > 0,
+            canRedo: room.redoStack.length > 0,
+            action: 'undo',
+            actionBy: user ? { id: user.id, name: user.name } : null,
+          });
         }
       }
     });
 
     // Handle redo
-    socket.on(SOCKET_EVENTS.CANVAS_REDO, (data: { roomId: string }) => {
-      const { roomId } = data;
+    socket.on(SOCKET_EVENTS.CANVAS_REDO, (data: { roomId: string; userId?: string }) => {
+      const { roomId, userId } = data;
       const room = rooms.get(roomId);
 
       if (room && room.redoStack.length > 0) {
         const stroke = room.redoStack.pop();
         if (stroke) {
           room.strokes.push(stroke);
+          // Get user info for attribution
+          const user = userId ? room.users.get(userId) : null;
           // Broadcast new state to ALL users in the room
-          io.to(roomId).emit(SOCKET_EVENTS.CANVAS_STATE, { strokes: room.strokes });
+          io.to(roomId).emit(SOCKET_EVENTS.CANVAS_STATE, { 
+            strokes: room.strokes,
+            canUndo: room.strokes.length > 0,
+            canRedo: room.redoStack.length > 0,
+            action: 'redo',
+            actionBy: user ? { id: user.id, name: user.name } : null,
+          });
         }
       }
     });
